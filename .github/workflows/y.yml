@@ -35,58 +35,18 @@ jobs:
               exit 1
           }
 
-      - name: Start ngrok tunnel for RDP
+      - name: Establish Serveo SSH Tunnel for RDP
         run: |
-          # Download and install ngrok
-          $ngrokUrl = "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip"
-          $zipPath = "$env:TEMP\ngrok.zip"
-          $ngrokDir = "$env:TEMP\ngrok"
-
-          Invoke-WebRequest -Uri $ngrokUrl -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $ngrokDir -Force
-          Remove-Item $zipPath -Force
-          
-          # Start the ngrok tunnel in the background
-          # We use a public RDP tunnel which does not require an auth token
-          Start-Process -FilePath "$ngrokDir\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
-          
-          # Wait for the tunnel to start and get the address
-          $tunnelAddress = $null
-          $retries = 0
-          while (-not $tunnelAddress -and $retries -lt 30) {
-              try {
-                  $response = Invoke-WebRequest -Uri "http://127.0.0.1:4040/api/tunnels" -ErrorAction Stop
-                  $tunnels = ConvertFrom-Json $response.Content
-                  $tunnelAddress = $tunnels.tunnels[0].public_url
-              } catch {
-                  Start-Sleep -Seconds 5
-              }
-              $retries++
-          }
-
-          if (-not $tunnelAddress) {
-              Write-Error "Failed to start ngrok tunnel or retrieve address."
-              exit 1
-          }
-
-          echo "NGROK_ADDRESS=$tunnelAddress" >> $env:GITHUB_ENV
-
-      - name: Verify RDP Accessibility
-        run: |
-          Write-Host "Ngrok RDP Address: $env:NGROK_ADDRESS"
-          Write-Host "Please note that the ngrok address and port will be different each time the workflow runs."
-          $address = $env:NGROK_ADDRESS.Split(':')
-          $testResult = Test-NetConnection -ComputerName $address[1].Substring(2) -Port $address[2]
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          Write-Host "Establishing SSH tunnel to serveo.net..."
+          # The command creates an SSH tunnel from Serveo's port 3389 to the local machine's RDP port 3389.
+          # The `-o` flags are for a non-interactive session suitable for GitHub Actions.
+          ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -R 3389:localhost:3389 serveo.net
+          # The workflow will pause here until the SSH connection is terminated.
 
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:NGROK_ADDRESS"
+          Write-Host "Address: serveo.net"
           Write-Host "Username: TOOLBOXLAP"
           Write-Host "Password: admin@123"
           Write-Host "==================`n"

@@ -1,6 +1,7 @@
 name: RDP
 on:
   workflow_dispatch:
+
 jobs:
   secure-rdp:
     runs-on: windows-latest
@@ -34,37 +35,50 @@ jobs:
               exit 1
           }
 
-      - name: Install Tailscale
+      - name: Start ngrok tunnel for RDP
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
+          # Download and install ngrok
+          $ngrokUrl = "https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip"
+          $zipPath = "$env:TEMP\ngrok.zip"
+          $ngrokDir = "$env:TEMP\ngrok"
 
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Establish Tailscale Connection
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          $tsIP = $null
+          Invoke-WebRequest -Uri $ngrokUrl -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $ngrokDir -Force
+          Remove-Item $zipPath -Force
+          
+          # Start the ngrok tunnel in the background
+          # We use a public RDP tunnel which does not require an auth token
+          Start-Process -FilePath "$ngrokDir\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          
+          # Wait for the tunnel to start and get the address
+          $tunnelAddress = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
+          while (-not $tunnelAddress -and $retries -lt 30) {
+              try {
+                  $response = Invoke-WebRequest -Uri "http://127.0.0.1:4040/api/tunnels" -ErrorAction Stop
+                  $tunnels = ConvertFrom-Json $response.Content
+                  $tunnelAddress = $tunnels.tunnels[0].public_url
+              } catch {
+                  Start-Sleep -Seconds 5
+              }
               $retries++
           }
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+
+          if (-not $tunnelAddress) {
+              Write-Error "Failed to start ngrok tunnel or retrieve address."
               exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+          echo "NGROK_ADDRESS=$tunnelAddress" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          Write-Host "Ngrok RDP Address: $env:NGROK_ADDRESS"
+          Write-Host "Please note that the ngrok address and port will be different each time the workflow runs."
+          $address = $env:NGROK_ADDRESS.Split(':')
+          $testResult = Test-NetConnection -ComputerName $address[1].Substring(2) -Port $address[2]
           if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+              Write-Error "TCP connection to RDP port failed"
               exit 1
           }
           Write-Host "TCP connectivity successful!"
@@ -72,7 +86,7 @@ jobs:
       - name: Maintain Connection
         run: |
           Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Address: $env:NGROK_ADDRESS"
           Write-Host "Username: TOOLBOXLAP"
           Write-Host "Password: admin@123"
           Write-Host "==================`n"
